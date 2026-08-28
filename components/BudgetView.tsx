@@ -137,7 +137,7 @@ export function BudgetView({
               onBlur={() => saveStartDay(parseInt(startDayDraft, 10) || 1)}
               inputMode="numeric"
               placeholder="Eget datum (1–28)"
-              className="flex-1 rounded-xl px-3 py-2 text-[13px] font-semibold outline-none bg-cream border border-sand text-ink"
+              className="min-w-0 flex-1 rounded-xl px-3 py-2 text-[13px] font-semibold outline-none bg-cream border border-sand text-ink"
             />
             <span className="text-[11px] text-mauve">i varje månad</span>
           </div>

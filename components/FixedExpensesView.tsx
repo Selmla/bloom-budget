@@ -108,7 +108,7 @@ export function FixedExpensesView({
               onChange={(e) => setIncomeDraft(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && saveIncome()}
               inputMode="decimal"
-              className="flex-1 rounded-xl px-3 py-2 text-[20px] font-bold outline-none bg-cream border border-sand text-ink"
+              className="min-w-0 flex-1 rounded-xl px-3 py-2 text-[20px] font-bold outline-none bg-cream border border-sand text-ink"
             />
             <button onClick={saveIncome} className="rounded-xl px-4 py-2 text-[13px] font-bold bg-coral text-cream">
               Spara

@@ -45,6 +45,23 @@ export default function HomePage() {
   const [incomeSuggestion, setIncomeSuggestion] = useState<{ amount: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // React only re-renders on a state change — with no ticking clock, date-based
+  // displays (like "dagar kvar") and the period-rollover check below would freeze
+  // if the app is just left open (or an installed PWA left running) across a day
+  // boundary. Bump this whenever the app becomes visible again so both refresh.
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    function refresh() {
+      if (document.visibilityState === "visible") setTick((t) => t + 1);
+    }
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("focus", refresh);
+    return () => {
+      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("focus", refresh);
+    };
+  }, []);
+
   // Register the service worker so the app can be installed and used offline.
   useEffect(() => {
     if ("serviceWorker" in navigator) {
@@ -128,7 +145,7 @@ export default function HomePage() {
       setTimeout(() => setCelebrate(false), 1000);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, state.cycleAnchorDate, state.cycleEndDate, state.budgetPeriod, state.budgetStartDay]);
+  }, [ready, state.cycleAnchorDate, state.cycleEndDate, state.budgetPeriod, state.budgetStartDay, tick]);
 
   const fixedTotal = useMemo(() => state.fixed.reduce((s, e) => s + e.amount, 0), [state.fixed]);
 
