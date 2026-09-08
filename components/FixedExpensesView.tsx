@@ -10,12 +10,14 @@ export function FixedExpensesView({
   setFixed,
   income,
   setIncome,
+  planningNext = false,
   onBack,
 }: {
   fixed: FixedExpense[];
   setFixed: (f: FixedExpense[]) => void;
   income: number;
   setIncome: (n: number) => void;
+  planningNext?: boolean;
   onBack: () => void;
 }) {
   const [showAdd, setShowAdd] = useState(false);
@@ -81,13 +83,22 @@ export function FixedExpensesView({
         <button onClick={onBack} className="flex items-center justify-center h-9 w-9 rounded-full bg-white border border-sand" aria-label="Tillbaka">
           <ArrowLeft size={16} color="#241623" />
         </button>
-        <h1 className="font-display text-2xl font-bold text-ink">Fasta utgifter</h1>
+        <h1 className="font-display text-2xl font-bold text-ink">Fasta utgifter{planningNext ? " · nästa period" : ""}</h1>
       </div>
+
+      {planningNext && (
+        <Card className="p-3 mb-4 bg-peach border-peachline">
+          <p className="text-[12px] text-ink">
+            Du planerar fasta utgifter för nästa period. Nuvarande period påverkas inte — de utgår från din befintliga lista tills
+            du sparar här, och tar sedan över automatiskt när nästa period börjar.
+          </p>
+        </Card>
+      )}
 
       <Card className="p-4 mb-4">
         <div className="flex items-center justify-between">
           <p className="text-[12px] font-semibold text-mauve">Månadsinkomst</p>
-          {!editingIncome && (
+          {!editingIncome && !planningNext && (
             <button
               onClick={() => {
                 setIncomeDraft(String(income));
@@ -100,7 +111,7 @@ export function FixedExpensesView({
             </button>
           )}
         </div>
-        {editingIncome ? (
+        {editingIncome && !planningNext ? (
           <div className="flex items-center gap-2 mt-1.5">
             <input
               autoFocus

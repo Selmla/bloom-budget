@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Flame, Plus, Sparkles, X, ChevronRight } from "lucide-react";
+import { Flame, Plus, Sparkles, X, ChevronRight, ChevronLeft } from "lucide-react";
 import { Card, Ring, Confetti } from "../components/ui";
 import { IntroScreen } from "../components/IntroScreen";
 import { FixedExpensesView } from "../components/FixedExpensesView";
@@ -9,7 +9,7 @@ import { SavingsView } from "../components/SavingsView";
 import { DebtsView } from "../components/DebtsView";
 import { BudgetView } from "../components/BudgetView";
 import { useAppState } from "../lib/useAppState";
-import { PURCHASE_CATEGORY_COLORS } from "../lib/types";
+import { BudgetPeriod, FixedExpense, PURCHASE_CATEGORY_COLORS, incomeAt } from "../lib/types";
 import {
   todayISO,
   toISO,
@@ -17,18 +17,29 @@ import {
   daysLeftInWeek,
   periodBounds,
   nextPeriodBounds,
+  prevPeriodBounds,
   cycleRangeLabel,
   budgetRingColor,
   WEEKS_PER_MONTH,
 } from "../lib/dates";
 
 type View = "home" | "fixed" | "savings" | "debts" | "budget";
+// -1 = previous period (read-only history), 0 = the real current period, 1 = next
+// period (can plan ahead into it). Purely a home-screen viewing choice — it never
+// touches state.cycleAnchorDate/cycleEndDate, which is what the automatic
+// streak/XP rollover actually tracks, so browsing can never desync a real rollover.
+type ViewOffset = -1 | 0 | 1;
 const XP_TO_NEXT = 500;
 
 function nextXpLevel(xp: number, level: number, amount: number) {
   const next = xp + amount;
   if (next >= XP_TO_NEXT) return { xp: next - XP_TO_NEXT, level: level + 1, leveledUp: true };
   return { xp: next, level, leveledUp: false };
+}
+
+function periodPhrase(period: BudgetPeriod, offset: ViewOffset): string {
+  if (period === "week") return offset === -1 ? "förra veckan" : offset === 1 ? "nästa vecka" : "denna vecka";
+  return offset === -1 ? "förra månaden" : offset === 1 ? "nästa månad" : "denna månad";
 }
 
 export default function HomePage() {
@@ -43,6 +54,7 @@ export default function HomePage() {
   const [showXpInfo, setShowXpInfo] = useState(false);
   const [showStreakInfo, setShowStreakInfo] = useState(false);
   const [incomeSuggestion, setIncomeSuggestion] = useState<{ amount: number } | null>(null);
+  const [viewOffset, setViewOffset] = useState<ViewOffset>(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // React only re-renders on a state change — with no ticking clock, date-based
@@ -116,7 +128,7 @@ export default function HomePage() {
       });
       const periodSpent = periodPurchases.filter((p) => p.type === "expense").reduce((s, p) => s + p.amount, 0);
       const periodIncome = periodPurchases.filter((p) => p.type === "income").reduce((s, p) => s + p.amount, 0);
-      const monthlyPlan = state.income - fixedTotalNow;
+      const monthlyPlan = incomeAt(state.income, state.incomeHistory, toISO(anchor)) - fixedTotalNow;
       const periodBudget =
         state.budgetOverride !== null
           ? state.budgetPeriod === "week"
@@ -139,7 +151,19 @@ export default function HomePage() {
       [anchor, end] = nextPeriodBounds(end, state.budgetPeriod, state.budgetStartDay);
     }
 
-    update({ cycleAnchorDate: toISO(anchor), cycleEndDate: toISO(end), streak, xp, level });
+    // A real rollover happened — promote any fixed-expenses plan staged for the
+    // period that's now starting, so it becomes the live figure from here on.
+    update({
+      cycleAnchorDate: toISO(anchor),
+      cycleEndDate: toISO(end),
+      streak,
+      xp,
+      level,
+      ...(state.pendingFixed ? { fixed: state.pendingFixed.fixed, pendingFixed: null } : {}),
+    });
+    // Drop back to viewing "now" in case the user had browsed to the period that
+    // just became current (or later).
+    setViewOffset(0);
     if (leveledUp) {
       setCelebrate(true);
       setTimeout(() => setCelebrate(false), 1000);
@@ -149,7 +173,9 @@ export default function HomePage() {
 
   const fixedTotal = useMemo(() => state.fixed.reduce((s, e) => s + e.amount, 0), [state.fixed]);
 
-  const currentPeriodPurchases = useMemo(() => {
+  // The real, tracked current period — always what streak/XP evaluate against,
+  // and what the Budget view shows, regardless of what's being browsed below.
+  const realCurrentPurchases = useMemo(() => {
     if (!state.cycleAnchorDate || !state.cycleEndDate) return [];
     const start = new Date(state.cycleAnchorDate);
     const end = new Date(state.cycleEndDate);
@@ -159,10 +185,12 @@ export default function HomePage() {
     });
   }, [state.purchases, state.cycleAnchorDate, state.cycleEndDate]);
 
-  const spent = useMemo(() => currentPeriodPurchases.filter((p) => p.type === "expense").reduce((s, p) => s + p.amount, 0), [currentPeriodPurchases]);
-  const extraIncome = useMemo(() => currentPeriodPurchases.filter((p) => p.type === "income").reduce((s, p) => s + p.amount, 0), [currentPeriodPurchases]);
+  const spent = useMemo(() => realCurrentPurchases.filter((p) => p.type === "expense").reduce((s, p) => s + p.amount, 0), [realCurrentPurchases]);
+  const extraIncome = useMemo(() => realCurrentPurchases.filter((p) => p.type === "income").reduce((s, p) => s + p.amount, 0), [realCurrentPurchases]);
 
   const monthlyBudgetPlanned = state.income - fixedTotal;
+  // Always the live, current-moment figure — what Budget view shows, unaffected
+  // by whatever period is being browsed on the home screen below.
   const budgetPlanned =
     state.budgetOverride !== null
       ? state.budgetPeriod === "week"
@@ -171,9 +199,55 @@ export default function HomePage() {
       : state.budgetPeriod === "week"
       ? Math.round(monthlyBudgetPlanned / WEEKS_PER_MONTH)
       : monthlyBudgetPlanned;
-  const remaining = budgetPlanned - spent + extraIncome;
-  const isOverBudget = remaining < 0;
-  const budgetPct = budgetPlanned > 0 ? Math.max(0, Math.min(100, 100 - ((spent - extraIncome) / budgetPlanned) * 100)) : 0;
+
+  // The period the home screen is currently displaying — independent of the real
+  // tracked period above, and reset to "now" on every fresh load (not persisted).
+  const viewedBounds = useMemo<[Date, Date] | null>(() => {
+    if (!state.cycleAnchorDate || !state.cycleEndDate) return null;
+    const anchor = new Date(state.cycleAnchorDate);
+    const end = new Date(state.cycleEndDate);
+    if (viewOffset === 0) return [anchor, end];
+    if (viewOffset === 1) return nextPeriodBounds(end, state.budgetPeriod, state.budgetStartDay);
+    return prevPeriodBounds(anchor, state.budgetPeriod, state.budgetStartDay);
+  }, [state.cycleAnchorDate, state.cycleEndDate, state.budgetPeriod, state.budgetStartDay, viewOffset]);
+
+  const viewedPurchases = useMemo(() => {
+    if (!viewedBounds) return [];
+    const [start, end] = viewedBounds;
+    return state.purchases.filter((p) => {
+      const d = new Date(p.date);
+      return d >= start && d < end;
+    });
+  }, [state.purchases, viewedBounds]);
+
+  // If fixed expenses have been staged for next period, that's what "next" should
+  // plan against — current/past are untouched by it, they only ever see `fixed`.
+  const viewedFixedTotal =
+    viewOffset === 1 && state.pendingFixed ? state.pendingFixed.fixed.reduce((s, e) => s + e.amount, 0) : fixedTotal;
+
+  // Uses the income that was actually in effect at the start of the VIEWED period —
+  // editing income today only reshapes the current and future periods; a period
+  // you're browsing in the past keeps showing what its budget genuinely was.
+  // (Any custom override isn't logged this way yet, so it still uses today's live
+  // value for every period — see TODO.md.)
+  const viewedBudgetPlanned = useMemo(() => {
+    if (!viewedBounds) return budgetPlanned;
+    const viewedMonthlyPlanned = incomeAt(state.income, state.incomeHistory, toISO(viewedBounds[0])) - viewedFixedTotal;
+    return state.budgetOverride !== null
+      ? state.budgetPeriod === "week"
+        ? Math.round(state.budgetOverride / WEEKS_PER_MONTH)
+        : state.budgetOverride
+      : state.budgetPeriod === "week"
+      ? Math.round(viewedMonthlyPlanned / WEEKS_PER_MONTH)
+      : viewedMonthlyPlanned;
+  }, [viewedBounds, state.income, state.incomeHistory, viewedFixedTotal, state.budgetOverride, state.budgetPeriod]);
+
+  const viewedSpent = useMemo(() => viewedPurchases.filter((p) => p.type === "expense").reduce((s, p) => s + p.amount, 0), [viewedPurchases]);
+  const viewedExtraIncome = useMemo(() => viewedPurchases.filter((p) => p.type === "income").reduce((s, p) => s + p.amount, 0), [viewedPurchases]);
+  const viewedRemaining = viewedBudgetPlanned - viewedSpent + viewedExtraIncome;
+  const viewedIsOverBudget = viewedRemaining < 0;
+  const viewedBudgetPct =
+    viewedBudgetPlanned > 0 ? Math.max(0, Math.min(100, 100 - ((viewedSpent - viewedExtraIncome) / viewedBudgetPlanned) * 100)) : 0;
 
   const debtTotalOriginal = useMemo(() => state.loans.reduce((s, l) => s + l.originalAmount, 0), [state.loans]);
   const debtTotalCurrent = useMemo(() => state.loans.reduce((s, l) => s + l.currentBalance, 0), [state.loans]);
@@ -202,18 +276,23 @@ export default function HomePage() {
   }
 
   function addPurchase() {
+    if (viewOffset === -1) return; // history is read-only
     const amt = parseFloat(draftAmount);
     if (!draftLabel.trim() || !amt || amt <= 0) return;
+    // Planned (next-period) transactions are dated to that period's start, since
+    // there's no real "today" inside a period that hasn't begun yet.
+    const date = viewOffset === 1 && viewedBounds ? toISO(viewedBounds[0]) : todayISO();
     const tx = {
       id: Date.now(),
       label: draftLabel.trim(),
       amount: amt,
       type: draftType,
       category: draftType === "expense" ? draftCategory : null,
-      date: todayISO(),
+      date,
     };
     update({ purchases: [...state.purchases, tx] });
-    if (draftType === "income") setIncomeSuggestion({ amount: amt });
+    // Saving-a-portion only makes sense for money that's actually arrived.
+    if (draftType === "income" && viewOffset === 0) setIncomeSuggestion({ amount: amt });
     setDraftLabel("");
     setDraftAmount("");
     setDraftType("expense");
@@ -223,6 +302,30 @@ export default function HomePage() {
 
   function removePurchase(id: number) {
     update({ purchases: state.purchases.filter((p) => p.id !== id) });
+  }
+
+  // Logs *when* an income change takes effect (the start of the current tracked
+  // period) so past periods keep showing what income actually was back then.
+  // Editing again within the same period corrects that entry in place rather
+  // than logging a second change for a period that hasn't even ended yet.
+  function setIncome(newIncome: number) {
+    const from = state.cycleAnchorDate || todayISO();
+    const history = [...state.incomeHistory];
+    if (history.length > 0 && history[history.length - 1].from === from) {
+      history[history.length - 1] = { from, amount: newIncome };
+    } else {
+      history.push({ from, amount: newIncome });
+    }
+    update({ income: newIncome, incomeHistory: history });
+  }
+
+  // Stages fixed expenses for the period that hasn't started yet — `fixed` itself
+  // is left untouched, so this can never change the current period's numbers. It
+  // gets promoted to `fixed` automatically once that period actually begins (see
+  // the rollover effect above).
+  function stageFixedForNextPeriod(newFixed: FixedExpense[]) {
+    if (!viewedBounds) return;
+    update({ pendingFixed: { from: toISO(viewedBounds[0]), fixed: newFixed } });
   }
 
   function saveSuggestionToDeposits(amt: number) {
@@ -244,12 +347,14 @@ export default function HomePage() {
   }
 
   if (view === "fixed") {
+    const planningNext = viewOffset === 1;
     return (
       <FixedExpensesView
-        fixed={state.fixed}
-        setFixed={(fixed) => update({ fixed })}
+        fixed={planningNext ? state.pendingFixed?.fixed ?? state.fixed : state.fixed}
+        setFixed={planningNext ? stageFixedForNextPeriod : (fixed) => update({ fixed })}
         income={state.income}
-        setIncome={(income) => update({ income })}
+        setIncome={setIncome}
+        planningNext={planningNext}
         onBack={() => setView("home")}
       />
     );
@@ -313,17 +418,48 @@ export default function HomePage() {
         <div className="flex items-center justify-between mb-6">
           <div>
             <p className="text-[13px] font-medium text-mauve">Hej! 🌸</p>
-            <h1 className="font-display text-2xl font-bold text-ink">
-              {state.budgetPeriod === "month" && state.budgetStartDay !== 1 && state.cycleAnchorDate && state.cycleEndDate
-                ? cycleRangeLabel(state.cycleAnchorDate, state.cycleEndDate)
-                : new Date().toLocaleDateString("sv-SE", { month: "long" }).replace(/^./, (c) => c.toUpperCase())}
-            </h1>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setViewOffset((o) => (o > -1 ? ((o - 1) as ViewOffset) : o))}
+                disabled={viewOffset === -1}
+                className="h-6 w-6 shrink-0 rounded-full flex items-center justify-center bg-white border border-sand disabled:opacity-30"
+                aria-label="Föregående period"
+              >
+                <ChevronLeft size={13} color="#241623" />
+              </button>
+              <h1 className="font-display text-2xl font-bold text-ink">
+                {!viewedBounds
+                  ? new Date().toLocaleDateString("sv-SE", { month: "long" }).replace(/^./, (c) => c.toUpperCase())
+                  : state.budgetPeriod === "month" && state.budgetStartDay !== 1
+                  ? cycleRangeLabel(toISO(viewedBounds[0]), toISO(viewedBounds[1]))
+                  : viewedBounds[0].toLocaleDateString("sv-SE", { month: "long" }).replace(/^./, (c) => c.toUpperCase())}
+              </h1>
+              <button
+                onClick={() => setViewOffset((o) => (o < 1 ? ((o + 1) as ViewOffset) : o))}
+                disabled={viewOffset === 1}
+                className="h-6 w-6 shrink-0 rounded-full flex items-center justify-center bg-white border border-sand disabled:opacity-30"
+                aria-label="Nästa period"
+              >
+                <ChevronRight size={13} color="#241623" />
+              </button>
+            </div>
             <p className="text-[11px] font-medium mt-0.5 text-mauve">
-              {state.budgetPeriod === "week"
-                ? `Vecka ${getISOWeek(new Date())} · ${daysLeftInWeek()} dagar kvar`
-                : state.cycleEndDate
-                ? `${Math.max(0, Math.round((new Date(state.cycleEndDate).getTime() - Date.now()) / 86400000))} dagar kvar`
-                : ""}
+              {!viewedBounds ? (
+                ""
+              ) : viewOffset === 0 ? (
+                state.budgetPeriod === "week" ? (
+                  `Vecka ${getISOWeek(viewedBounds[0])} · ${daysLeftInWeek()} dagar kvar`
+                ) : (
+                  `${Math.max(0, Math.round((viewedBounds[1].getTime() - Date.now()) / 86400000))} dagar kvar`
+                )
+              ) : (
+                <>
+                  {state.budgetPeriod === "week" ? `Vecka ${getISOWeek(viewedBounds[0])} · ` : ""}
+                  {viewOffset === 1
+                    ? `Börjar om ${Math.max(0, Math.round((viewedBounds[0].getTime() - Date.now()) / 86400000))} dagar`
+                    : "Avslutad"}
+                </>
+              )}
             </p>
           </div>
           <button
@@ -346,6 +482,17 @@ export default function HomePage() {
           </Card>
         )}
 
+        {viewOffset !== 0 && (
+          <Card className="p-3 mb-4 flex items-center justify-between gap-3 bg-peach border-peachline">
+            <p className="text-[12px] font-semibold text-ink">
+              {viewOffset === 1 ? "Du planerar en kommande period — inget räknas ännu." : "Du tittar på en avslutad period (historik)."}
+            </p>
+            <button onClick={() => setViewOffset(0)} className="shrink-0 text-[11px] font-bold text-coral">
+              Till nu
+            </button>
+          </Card>
+        )}
+
         {/* first-run prompt */}
         {state.income === 0 && (
           <Card className="p-4 mb-4 bg-peach border-peachline">
@@ -361,18 +508,24 @@ export default function HomePage() {
         <div className="rounded-3xl p-5 mb-4 relative overflow-hidden bg-ink">
           <div className="flex items-center justify-between mb-1">
             <p className="text-[13px] font-medium" style={{ color: "#C9AFC2" }}>
-              Kvar att röra dig med
+              {viewOffset === 1 ? "Planerat kvar" : viewOffset === -1 ? "Blev kvar" : "Kvar att röra dig med"}
             </p>
             <div className="flex rounded-full p-0.5" style={{ background: "rgba(255,255,255,0.1)" }}>
               <button
-                onClick={() => update({ budgetPeriod: "month" })}
+                onClick={() => {
+                  update({ budgetPeriod: "month" });
+                  setViewOffset(0);
+                }}
                 className="text-[10px] font-bold px-2.5 py-1 rounded-full text-cream"
                 style={{ background: state.budgetPeriod === "month" ? "#FF6B5B" : "transparent" }}
               >
                 Månad
               </button>
               <button
-                onClick={() => update({ budgetPeriod: "week" })}
+                onClick={() => {
+                  update({ budgetPeriod: "week" });
+                  setViewOffset(0);
+                }}
                 className="text-[10px] font-bold px-2.5 py-1 rounded-full text-cream"
                 style={{ background: state.budgetPeriod === "week" ? "#FF6B5B" : "transparent" }}
               >
@@ -380,15 +533,15 @@ export default function HomePage() {
               </button>
             </div>
           </div>
-          <p className="font-display text-4xl font-bold mt-1" style={{ color: isOverBudget ? "#FF6B5B" : "#FFF9F4" }}>
-            {remaining.toLocaleString("sv-SE")} kr
+          <p className="font-display text-4xl font-bold mt-1" style={{ color: viewedIsOverBudget ? "#FF6B5B" : "#FFF9F4" }}>
+            {viewedRemaining.toLocaleString("sv-SE")} kr
           </p>
           <p className="text-[12px] mt-2" style={{ color: "#C9AFC2" }}>
-            av {budgetPlanned.toLocaleString("sv-SE")} kr {state.budgetPeriod === "week" ? "denna vecka" : "denna månad"}
+            av {viewedBudgetPlanned.toLocaleString("sv-SE")} kr {periodPhrase(state.budgetPeriod, viewOffset)}
           </p>
-          {isOverBudget && (
+          {viewedIsOverBudget && (
             <div className="mt-2 rounded-xl px-3 py-2" style={{ background: "rgba(255,107,91,0.15)" }}>
-              <p className="text-[12px] font-bold text-coral">⚠️ {Math.abs(remaining).toLocaleString("sv-SE")} kr över budget</p>
+              <p className="text-[12px] font-bold text-coral">⚠️ {Math.abs(viewedRemaining).toLocaleString("sv-SE")} kr över budget</p>
             </div>
           )}
           <div className="absolute -right-6 -bottom-8 h-28 w-28 rounded-full opacity-20 bg-coral" />
@@ -399,8 +552,8 @@ export default function HomePage() {
           <button onClick={() => setView("budget")} className="relative">
             <ChevronRight size={12} color="#D8C4B8" className="absolute top-2 right-2 z-10" />
             <Card className="py-4 flex flex-col items-center gap-2">
-              <Ring pct={budgetPct} color={budgetRingColor(budgetPct)}>
-                <span className="text-[13px] font-bold text-ink">{Math.round(budgetPct)}%</span>
+              <Ring pct={viewedBudgetPct} color={budgetRingColor(viewedBudgetPct)}>
+                <span className="text-[13px] font-bold text-ink">{Math.round(viewedBudgetPct)}%</span>
               </Ring>
               <span className="text-[11px] font-semibold text-mauve">Budget</span>
             </Card>
@@ -472,17 +625,19 @@ export default function HomePage() {
 
         {/* purchases */}
         <div className="flex items-center justify-between mb-2">
-          <h2 className="text-[14px] font-bold text-ink">Transaktioner {state.budgetPeriod === "week" ? "denna vecka" : "denna månad"}</h2>
+          <h2 className="text-[14px] font-bold text-ink">Transaktioner {periodPhrase(state.budgetPeriod, viewOffset)}</h2>
           <span className="text-[12px] font-medium text-mauve">
-            -{spent.toLocaleString("sv-SE")} kr
-            {extraIncome > 0 ? ` · +${extraIncome.toLocaleString("sv-SE")} kr` : ""}
+            -{viewedSpent.toLocaleString("sv-SE")} kr
+            {viewedExtraIncome > 0 ? ` · +${viewedExtraIncome.toLocaleString("sv-SE")} kr` : ""}
           </span>
         </div>
         <Card className="overflow-hidden mb-4">
-          {currentPeriodPurchases.length === 0 && (
-            <p className="text-[13px] p-4 text-mauve">Inga transaktioner {state.budgetPeriod === "week" ? "denna vecka" : "denna månad"} ännu.</p>
+          {viewedPurchases.length === 0 && (
+            <p className="text-[13px] p-4 text-mauve">
+              {viewOffset === 1 ? `Inget planerat ${periodPhrase(state.budgetPeriod, viewOffset)} än.` : `Inga transaktioner ${periodPhrase(state.budgetPeriod, viewOffset)}.`}
+            </p>
           )}
-          {currentPeriodPurchases.map((p, i) => (
+          {viewedPurchases.map((p, i) => (
             <div key={p.id} className="flex items-center justify-between px-4 py-3" style={{ borderTop: i === 0 ? "none" : "1px solid #F3E9DE" }}>
               <div className="flex items-center gap-2">
                 {p.category && <span className="h-2 w-2 rounded-full shrink-0" style={{ background: PURCHASE_CATEGORY_COLORS[p.category] || "#C9AFC2" }} />}
@@ -493,9 +648,11 @@ export default function HomePage() {
                   {p.type === "income" ? "+" : "-"}
                   {p.amount.toLocaleString("sv-SE")} kr
                 </span>
-                <button onClick={() => removePurchase(p.id)} aria-label="Ta bort">
-                  <X size={14} color="#D8C4B8" />
-                </button>
+                {viewOffset !== -1 && (
+                  <button onClick={() => removePurchase(p.id)} aria-label="Ta bort">
+                    <X size={14} color="#D8C4B8" />
+                  </button>
+                )}
               </div>
             </div>
           ))}
@@ -519,10 +676,14 @@ export default function HomePage() {
         )}
 
         {/* fixed expenses row */}
-        <button onClick={() => setView("fixed")} className="w-full flex items-center justify-between rounded-2xl px-4 py-3 mb-4 bg-peach border border-peachline">
-          <span className="text-[13px] font-semibold text-ink">Fasta utgifter · {fixedTotal.toLocaleString("sv-SE")} kr</span>
-          <ChevronRight size={16} color="#B08D7A" />
-        </button>
+        {viewOffset !== -1 && (
+          <button onClick={() => setView("fixed")} className="w-full flex items-center justify-between rounded-2xl px-4 py-3 mb-4 bg-peach border border-peachline">
+            <span className="text-[13px] font-semibold text-ink">
+              Fasta utgifter{viewOffset === 1 ? " · nästa period" : ""} · {viewedFixedTotal.toLocaleString("sv-SE")} kr
+            </span>
+            <ChevronRight size={16} color="#B08D7A" />
+          </button>
+        )}
 
         <div className="flex items-center justify-center gap-4 mb-4">
           <button onClick={exportBackup} className="text-[11px] font-bold text-mint">
@@ -555,10 +716,10 @@ export default function HomePage() {
           </button>
         </div>
 
-        {!showAdd && (
+        {!showAdd && viewOffset !== -1 && (
           <button onClick={() => setShowAdd(true)} className="fixed bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 rounded-full px-5 py-3 shadow-lg bg-coral">
             <Plus size={18} color="#FFF9F4" />
-            <span className="text-[14px] font-bold text-cream">Lägg till transaktion</span>
+            <span className="text-[14px] font-bold text-cream">{viewOffset === 1 ? "Planera transaktion" : "Lägg till transaktion"}</span>
           </button>
         )}
 
@@ -566,7 +727,7 @@ export default function HomePage() {
           <div className="fixed inset-0 flex items-end justify-center z-10" style={{ background: "rgba(36,22,35,0.45)" }} onClick={() => setShowAdd(false)}>
             <div className="bloom-pop w-full max-w-sm rounded-t-3xl p-5 pb-8 bg-cream" onClick={(e) => e.stopPropagation()}>
               <div className="h-1 w-10 rounded-full mx-auto mb-4 bg-sand" />
-              <h3 className="font-display text-lg font-bold mb-3 text-ink">Ny transaktion</h3>
+              <h3 className="font-display text-lg font-bold mb-3 text-ink">{viewOffset === 1 ? "Planerad transaktion" : "Ny transaktion"}</h3>
               <div className="flex gap-2 mb-3">
                 <button
                   onClick={() => setDraftType("expense")}

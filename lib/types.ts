@@ -30,10 +30,28 @@ export type Loan = {
 
 export type BudgetPeriod = "month" | "week";
 
+// A logged change of income, effective from `from` (the start of whichever budget
+// period was active when it was set) until the next entry takes over. Lets past
+// periods keep showing what income actually was then, even after you update it.
+export type IncomeEntry = {
+  from: string; // ISO yyyy-mm-dd
+  amount: number;
+};
+
+// A staged set of fixed expenses waiting to take effect from the start of the
+// next budget period. Kept separate from `fixed` (which always reflects only the
+// current period) so editing it can never change the current period's numbers.
+export type PendingFixed = {
+  from: string; // ISO yyyy-mm-dd — the next period's start
+  fixed: FixedExpense[];
+};
+
 export type AppState = {
   hasOnboarded: boolean;
   income: number;
+  incomeHistory: IncomeEntry[];
   fixed: FixedExpense[];
+  pendingFixed: PendingFixed | null;
   purchases: Transaction[];
   xp: number;
   level: number;
@@ -58,7 +76,9 @@ export type AppState = {
 export const DEFAULT_STATE: AppState = {
   hasOnboarded: false,
   income: 0,
+  incomeHistory: [],
   fixed: [],
+  pendingFixed: null,
   purchases: [],
   xp: 0,
   level: 1,
@@ -76,6 +96,18 @@ export const DEFAULT_STATE: AppState = {
   cycleAnchorDate: null,
   cycleEndDate: null,
 };
+
+// The income that was actually in effect on `dateISO`, per the logged history —
+// falls back to the current live value for dates before any history exists.
+export function incomeAt(income: number, incomeHistory: IncomeEntry[], dateISO: string): number {
+  if (incomeHistory.length === 0) return income;
+  let result = incomeHistory[0].amount;
+  for (const entry of incomeHistory) {
+    if (entry.from > dateISO) break;
+    result = entry.amount;
+  }
+  return result;
+}
 
 export const CATEGORY_COLORS: Record<string, string> = {
   Boende: "#FF6B5B",

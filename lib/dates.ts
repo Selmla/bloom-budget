@@ -69,6 +69,17 @@ export function nextPeriodBounds(prevEnd: Date, period: BudgetPeriod, startDay: 
   return [prevEnd, addMonthOnDay(prevEnd, startDay)];
 }
 
+function subMonthOnDay(date: Date, day: number): Date {
+  return new Date(date.getFullYear(), date.getMonth() - 1, day);
+}
+
+// The period immediately before one that starts at `anchor` — used to browse
+// backward one period without touching the actual tracked cycle in state.
+export function prevPeriodBounds(anchor: Date, period: BudgetPeriod, startDay: number): [Date, Date] {
+  if (period === "week") return [addDays(anchor, -7), anchor];
+  return [subMonthOnDay(anchor, startDay), anchor];
+}
+
 const SHORT_MONTHS = ["jan", "feb", "mar", "apr", "maj", "jun", "jul", "aug", "sep", "okt", "nov", "dec"];
 
 export function cycleRangeLabel(anchorISO: string, endISO: string): string {
