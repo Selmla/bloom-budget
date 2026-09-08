@@ -57,7 +57,7 @@ export function DebtsView({
     if (!draftLabel.trim() || !orig || orig <= 0 || bal < 0) return;
     const today = todayISO();
     if (editing) {
-      setLoans(loans.map((l) => (l.id === editing ? { ...l, label: draftLabel.trim(), originalAmount: orig, currentBalance: bal } : l)));
+      setLoans(loans.map((l) => (l.id === editing ? { ...l, label: draftLabel.trim(), originalAmount: orig, currentBalance: bal, lastUpdated: today } : l)));
     } else {
       setLoans([...loans, { id: Date.now(), label: draftLabel.trim(), originalAmount: orig, currentBalance: bal, lastUpdated: today }]);
     }
