@@ -18,6 +18,8 @@ export type SavingsDeposit = {
   id: number;
   label: string;
   amount: number;
+  date?: string;
+  kind?: "transfer" | "adjustment";
 };
 
 export type Loan = {
@@ -26,6 +28,29 @@ export type Loan = {
   originalAmount: number;
   currentBalance: number;
   lastUpdated: string; // ISO yyyy-mm-dd
+  trackedStartingBalance?: number;
+  archived?: boolean;
+};
+
+export type DebtEvent = {
+  id: number;
+  loanId: number;
+  date: string;
+  kind: "payment" | "correction";
+  before: number;
+  after: number;
+  principal: number;
+  fees: number;
+  includedInFixed: boolean;
+};
+
+export type PeriodReview = {
+  reviewedAt: string;
+  withinBudget: boolean;
+  complete?: boolean;
+  rewarded?: boolean;
+  signature?: string;
+  end?: string;
 };
 
 export type BudgetPeriod = "month" | "week";
@@ -47,7 +72,17 @@ export type PendingFixed = {
 };
 
 export type AppState = {
-  periodPlans: Record<string, { income: number; fixed: FixedExpense[]; override: number | null }>;
+  schemaVersion: number;
+  savingsGoalName: string;
+  debtEvents: DebtEvent[];
+  reviews: Record<string, PeriodReview>;
+  xpEnabled: boolean;
+  noSpendEnabled: boolean;
+  reminderEnabled: boolean;
+  periodPlans: Record<
+    string,
+    { income: number; fixed: FixedExpense[]; override: number | null }
+  >;
   hasOnboarded: boolean;
   income: number;
   incomeHistory: IncomeEntry[];
@@ -68,13 +103,20 @@ export type AppState = {
   budgetOverride: number | null;
   lastNoSpendDate: string | null;
   // Start/end of the currently active budget period (week or month, whichever is
-  // selected) — advances automatically past its end date, evaluating streak/XP
-  // for the period that just ended. See the rollover effect in app/page.tsx.
+  // selected) — advances automatically past its end date. Reviews are explicit;
+  // merely opening the app never counts as verified budget success.
   cycleAnchorDate: string | null;
   cycleEndDate: string | null;
 };
 
 export const DEFAULT_STATE: AppState = {
+  schemaVersion: 2,
+  savingsGoalName: "Mitt sparmål",
+  debtEvents: [],
+  reviews: {},
+  xpEnabled: true,
+  noSpendEnabled: false,
+  reminderEnabled: true,
   periodPlans: {},
   hasOnboarded: false,
   income: 0,
@@ -101,7 +143,11 @@ export const DEFAULT_STATE: AppState = {
 
 // The income that was actually in effect on `dateISO`, per the logged history —
 // falls back to the current live value for dates before any history exists.
-export function incomeAt(income: number, incomeHistory: IncomeEntry[], dateISO: string): number {
+export function incomeAt(
+  income: number,
+  incomeHistory: IncomeEntry[],
+  dateISO: string,
+): number {
   if (incomeHistory.length === 0) return income;
   let result = incomeHistory[0].amount;
   for (const entry of incomeHistory) {
@@ -113,25 +159,35 @@ export function incomeAt(income: number, incomeHistory: IncomeEntry[], dateISO: 
 
 // Keep a baseline when older saved data has no history, so scheduling the first
 // future change cannot accidentally make it apply to the current period too.
-export function incomeChange(state: Pick<AppState, "income" | "incomeHistory">, from: string, amount: number, currentFrom: string) {
+export function incomeChange(
+  state: Pick<AppState, "income" | "incomeHistory">,
+  from: string,
+  amount: number,
+  currentFrom: string,
+) {
   const history = state.incomeHistory.length
     ? state.incomeHistory
     : [{ from: "0001-01-01", amount: state.income }];
-  const incomeHistory = [...history.filter((entry) => entry.from !== from), { from, amount }]
-    .sort((a, b) => a.from.localeCompare(b.from));
-  return { incomeHistory, income: incomeAt(state.income, incomeHistory, currentFrom) };
+  const incomeHistory = [
+    ...history.filter((entry) => entry.from !== from),
+    { from, amount },
+  ].sort((a, b) => a.from.localeCompare(b.from));
+  return {
+    incomeHistory,
+    income: incomeAt(state.income, incomeHistory, currentFrom),
+  };
 }
 
 export const CATEGORY_COLORS: Record<string, string> = {
   Boende: "#FF6B5B",
-  "Räkningar": "#FFB627",
-  "Försäkring": "#2EC4B6",
-  "Övrigt": "#C9AFC2",
+  Räkningar: "#FFB627",
+  Försäkring: "#2EC4B6",
+  Övrigt: "#C9AFC2",
 };
 
 export const PURCHASE_CATEGORY_COLORS: Record<string, string> = {
   Mat: "#FF6B5B",
-  "Nöje": "#FFB627",
+  Nöje: "#FFB627",
   Transport: "#2EC4B6",
-  "Övrigt": "#C9AFC2",
+  Övrigt: "#C9AFC2",
 };

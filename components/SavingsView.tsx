@@ -1,244 +1,367 @@
 "use client";
-
-import { useMemo, useState } from "react";
-import { ArrowLeft, Pencil, Plus, X } from "lucide-react";
-import { Card, Ring } from "./ui";
-import { SavingsDeposit } from "../lib/types";
+import { ReactNode, useState } from "react";
+import { AppState, SavingsDeposit } from "../lib/types";
+import { money, newId, parseAmount, validDate } from "../lib/money";
+import { todayISO } from "../lib/dates";
+import { Card, Modal, Ring, inputClass, primaryClass } from "./ui";
 
 export function SavingsView({
-  goal,
-  setGoal,
-  targetDate,
-  setTargetDate,
-  deposits,
-  setDeposits,
-  monthlyContribution,
-  setMonthlyContribution,
-  current,
-  onAwardXp,
+  state,
+  onChangeGoal,
+  onAdd,
+  onRemove,
   onBack,
+  notice,
 }: {
-  goal: number;
-  setGoal: (n: number) => void;
-  targetDate: string;
-  setTargetDate: (s: string) => void;
-  deposits: SavingsDeposit[];
-  setDeposits: (d: SavingsDeposit[]) => void;
-  monthlyContribution: number;
-  setMonthlyContribution: (n: number) => void;
-  current: number;
-  onAwardXp: (n: number) => void;
+  state: AppState;
+  onChangeGoal: (
+    name: string,
+    goal: number,
+    date: string,
+    monthly: number,
+  ) => void;
+  onAdd: (item: SavingsDeposit) => void;
+  onRemove: (id: number) => void;
   onBack: () => void;
+  notice?: ReactNode;
 }) {
-  const [showAdd, setShowAdd] = useState(false);
-  const [draftLabel, setDraftLabel] = useState("");
-  const [draftAmount, setDraftAmount] = useState("");
-  const [editingGoal, setEditingGoal] = useState(false);
-  const [goalDraft, setGoalDraft] = useState(String(goal));
-  const [dateDraft, setDateDraft] = useState(targetDate);
-
-  const pct = goal > 0 ? Math.min(100, (current / goal) * 100) : 0;
-  const remainingToGoal = Math.max(0, goal - current);
-  const monthsAtCurrentPace = monthlyContribution > 0 ? Math.ceil(remainingToGoal / monthlyContribution) : null;
-
-  const projectedDate = useMemo(() => {
-    if (monthsAtCurrentPace === null) return null;
-    const d = new Date();
-    d.setMonth(d.getMonth() + monthsAtCurrentPace);
-    return d;
-  }, [monthsAtCurrentPace]);
-
-  const monthsUntilTarget = useMemo(() => {
-    if (!targetDate) return null;
-    const target = new Date(targetDate);
-    const now = new Date();
-    return Math.max(0, (target.getFullYear() - now.getFullYear()) * 12 + (target.getMonth() - now.getMonth()));
-  }, [targetDate]);
-
-  const monthsDiff = monthsUntilTarget !== null && monthsAtCurrentPace !== null ? monthsUntilTarget - monthsAtCurrentPace : null;
-
-  function saveGoal() {
-    const val = parseFloat(goalDraft);
-    if (val && val > 0) setGoal(val);
-    if (dateDraft) setTargetDate(dateDraft);
-    setEditingGoal(false);
+  const [dialog, setDialog] = useState<"goal" | "deposit" | null>(null);
+  const [name, setName] = useState(state.savingsGoalName);
+  const [goal, setGoal] = useState(String(state.savingsGoal));
+  const [target, setTarget] = useState(state.savingsTargetDate);
+  const [monthly, setMonthly] = useState(String(state.monthlyContribution));
+  const [label, setLabel] = useState("");
+  const [amount, setAmount] = useState("");
+  const [date, setDate] = useState(todayISO());
+  const [mode, setMode] = useState("transfer");
+  const [error, setError] = useState("");
+  const current = money(
+    state.savingsDeposits.reduce((s, e) => s + e.amount, 0),
+  );
+  const hasGoal = state.savingsGoal > 0;
+  const left = Math.max(0, money(state.savingsGoal - current));
+  const pct = hasGoal ? Math.min(100, (current / state.savingsGoal) * 100) : 0;
+  const monthStart = todayISO().slice(0, 7) + "-01";
+  const thisMonth = money(
+    state.savingsDeposits
+      .filter(
+        (e) =>
+          e.kind === "transfer" &&
+          e.date &&
+          e.date >= monthStart &&
+          e.date <= todayISO(),
+      )
+      .reduce((s, e) => s + e.amount, 0),
+  );
+  const months =
+    state.monthlyContribution > 0
+      ? Math.ceil(left / state.monthlyContribution)
+      : null;
+  const projected =
+    months === null
+      ? null
+      : new Date(
+          new Date().getFullYear(),
+          new Date().getMonth() + months,
+          1,
+        ).toLocaleDateString("sv-SE", { month: "long", year: "numeric" });
+  const milestone =
+    hasGoal && current > 0
+      ? pct >= 100
+        ? "Målet är nått! 🌸"
+        : pct >= 50
+          ? "Du har nått halva målet 🌱"
+          : current >= 1000
+            ? "Du har byggt upp minst 1 000 kr 🌱"
+            : "Varje insättning bygger ditt sparande 🌱"
+      : "";
+  function close() {
+    setDialog(null);
+    setError("");
   }
-
-  function addDeposit() {
-    const amt = parseFloat(draftAmount);
-    if (!draftLabel.trim() || !amt) return;
-    setDeposits([...deposits, { id: Date.now(), label: draftLabel.trim(), amount: amt }]);
-    if (amt > 0) onAwardXp(10);
-    setDraftLabel("");
-    setDraftAmount("");
-    setShowAdd(false);
+  function saveDeposit(e: React.FormEvent) {
+    e.preventDefault();
+    const value = parseAmount(amount);
+    if (!validDate(date) || date > todayISO()) {
+      setError("Välj ett giltigt datum, senast idag.");
+      return;
+    }
+    if (
+      !Number.isFinite(value) ||
+      value === 0 ||
+      (mode !== "adjustment" && value < 0)
+    ) {
+      setError(
+        "Ange ett giltigt belopp. Använd positivt belopp för överföring och uttag.",
+      );
+      return;
+    }
+    try {
+      onAdd({
+        id: newId(),
+        label: label.trim(),
+        amount: mode === "withdrawal" ? -value : value,
+        date,
+        kind: mode === "adjustment" ? "adjustment" : "transfer",
+      });
+      close();
+      setAmount("");
+      setLabel("");
+    } catch (e) {
+      setError((e as Error).message);
+    }
   }
-
-  function removeDeposit(id: number) {
-    setDeposits(deposits.filter((d) => d.id !== id));
-  }
-
-  const monthLabel = (d: Date | null) => (d ? d.toLocaleDateString("sv-SE", { month: "long", year: "numeric" }) : "");
-
   return (
-    <div className="w-full max-w-sm px-5 pt-8 pb-24 relative mx-auto">
-      <div className="flex items-center gap-3 mb-6">
-        <button onClick={onBack} className="flex items-center justify-center h-9 w-9 rounded-full bg-white border border-sand" aria-label="Tillbaka">
-          <ArrowLeft size={16} color="#241623" />
+    <main className="w-full max-w-sm mx-auto px-5 pt-8 pb-28 text-ink">
+      <div className="flex items-center gap-3 mb-5">
+        <button onClick={onBack} aria-label="Tillbaka" className="px-3 py-2">
+          ←
         </button>
-        <h1 className="font-display text-2xl font-bold text-ink">Sparande</h1>
+        <h1 className="font-display text-2xl font-bold">Sparande</h1>
       </div>
-
-      <div className="rounded-3xl p-5 mb-4 relative overflow-hidden bg-ink">
-        <p className="text-[13px] font-medium" style={{ color: "#C9AFC2" }}>
-          Sparat hittills
+      {notice}
+      <Card className="p-5 mb-4">
+        <p className="text-sm">{state.savingsGoalName}</p>
+        <p className="font-display text-4xl font-bold">
+          {current.toLocaleString("sv-SE")} kr
         </p>
-        <p className="font-display text-4xl font-bold mt-1 text-cream">{current.toLocaleString("sv-SE")} kr</p>
-        {!editingGoal ? (
-          <div className="flex items-center gap-2 mt-2">
-            <p className="text-[12px]" style={{ color: "#C9AFC2" }}>
-              av {goal.toLocaleString("sv-SE")} kr mål
-              {targetDate ? ` · ${new Date(targetDate).toLocaleDateString("sv-SE", { month: "long", year: "numeric" })}` : ""}
-            </p>
-            <button
-              onClick={() => {
-                setGoalDraft(String(goal));
-                setDateDraft(targetDate);
-                setEditingGoal(true);
-              }}
-              className="flex items-center gap-1"
-            >
-              <Pencil size={11} color="#C9AFC2" />
-              <span className="text-[11px] font-semibold" style={{ color: "#C9AFC2" }}>
-                Ändra
-              </span>
-            </button>
-          </div>
-        ) : (
-          <div className="mt-3 space-y-2">
-            <input
-              autoFocus
-              value={goalDraft}
-              onChange={(e) => setGoalDraft(e.target.value)}
-              inputMode="decimal"
-              placeholder="Sparmål (kr)"
-              className="w-full rounded-xl px-3 py-2 text-[14px] font-semibold outline-none bg-cream text-ink"
-            />
-            <input
-              value={dateDraft}
-              onChange={(e) => setDateDraft(e.target.value)}
-              type="date"
-              className="w-full rounded-xl px-3 py-2 text-[14px] font-semibold outline-none bg-cream text-ink"
-            />
-            <button onClick={saveGoal} className="w-full rounded-xl py-2 text-[13px] font-bold bg-mint text-cream">
-              Spara mål
-            </button>
-          </div>
-        )}
-        <div className="absolute -right-6 -bottom-8 h-28 w-28 rounded-full opacity-20 bg-mint" />
-      </div>
-
-      <Card className="p-4 mb-4 flex items-center gap-4">
-        <Ring pct={pct} color="#2EC4B6" size={72} stroke={8}>
-          <span className="text-[12px] font-bold text-ink">{Math.round(pct)}%</span>
+        <p className="text-sm mt-2">
+          {hasGoal
+            ? "av " + state.savingsGoal.toLocaleString("sv-SE") + " kr"
+            : "Sätt ett mål som betyder något för dig"}
+        </p>
+        <button
+          className="mt-3 underline"
+          onClick={() => {
+            setDialog("goal");
+            setName(state.savingsGoalName);
+            setGoal(String(state.savingsGoal));
+            setMonthly(String(state.monthlyContribution));
+            setTarget(state.savingsTargetDate);
+          }}
+        >
+          Ändra sparmål
+        </button>
+      </Card>
+      <Card className="p-4 mb-4 flex gap-4 items-center">
+        <Ring pct={pct} color="#2EC4B6" size={72}>
+          <span>{Math.round(pct)}%</span>
         </Ring>
         <div>
-          <p className="text-[13px] font-semibold text-ink">
-            {remainingToGoal > 0 ? `${remainingToGoal.toLocaleString("sv-SE")} kr kvar till målet` : "Målet uppnått! 🎉"}
+          <p>
+            {hasGoal
+              ? left.toLocaleString("sv-SE") + " kr kvar till målet"
+              : "Inget mål valt ännu"}
           </p>
-          <p className="text-[11px] mt-0.5 text-mauve">{deposits.length} insättningar hittills</p>
+          <p className="text-sm mt-1">{milestone}</p>
         </div>
       </Card>
-
       <Card className="p-4 mb-4">
-        <p className="text-[12px] font-semibold mb-3 text-mauve">Om du sparar per månad</p>
-        <div className="flex items-center gap-2 mb-3">
-          <button
-            onClick={() => setMonthlyContribution(Math.max(0, monthlyContribution - 250))}
-            className="h-8 w-8 rounded-full flex items-center justify-center text-[16px] font-bold bg-cream border border-sand text-ink"
-          >
-            −
-          </button>
-          <div className="flex-1 rounded-xl py-2 text-center text-[16px] font-bold bg-cream border border-sand text-ink">
-            {monthlyContribution.toLocaleString("sv-SE")} kr/mån
-          </div>
-          <button onClick={() => setMonthlyContribution(monthlyContribution + 250)} className="h-8 w-8 rounded-full flex items-center justify-center text-[16px] font-bold bg-mint text-cream">
-            +
-          </button>
-        </div>
-
-        {remainingToGoal === 0 ? (
-          <p className="text-[13px] text-ink">Du har redan nått ditt sparmål — grattis! 🌸</p>
-        ) : monthlyContribution > 0 ? (
-          <>
-            <p className="text-[13px] text-ink">
-              når du målet i <span className="font-bold">{monthLabel(projectedDate)}</span> (om ca {monthsAtCurrentPace} mån)
-            </p>
-            {monthsDiff !== null && monthsDiff !== 0 && (
-              <p className="text-[12px] font-semibold mt-1" style={{ color: monthsDiff > 0 ? "#2EC4B6" : "#FF6B5B" }}>
-                {monthsDiff > 0 ? `${monthsDiff} mån tidigare än ditt satta mål 🎉` : `${Math.abs(monthsDiff)} mån senare än ditt satta mål`}
-              </p>
-            )}
-          </>
-        ) : (
-          <p className="text-[13px] text-mauve">Ange ett månadsbelopp för att se en prognos.</p>
+        <p className="font-bold">Faktiskt sparat denna kalendermånad</p>
+        <p className="text-xl font-bold my-1">
+          {thisMonth.toLocaleString("sv-SE")} kr netto
+        </p>
+        <p className="text-sm">
+          Plan: {state.monthlyContribution.toLocaleString("sv-SE")} kr/mån
+        </p>
+        <p className="text-sm mt-2">
+          {!hasGoal
+            ? "Välj ett mål för att se en prognos."
+            : left === 0
+              ? "Du har nått ditt mål!"
+              : projected
+                ? "Med det planerade månadsbeloppet når du målet omkring " +
+                  projected +
+                  "."
+                : "Välj ett månadsbelopp för att se en prognos."}
+        </p>
+        {state.savingsTargetDate && (
+          <p className="text-sm mt-1">
+            Önskat måldatum: {state.savingsTargetDate}
+          </p>
         )}
-        <p className="text-[10px] mt-3 text-dust">Baserat enbart på beloppet du anger här — ingen ränta eller avkastning räknas in.</p>
+        <p className="text-xs mt-2 text-mauve">
+          Prognosen utgår från din plan, utan ränta eller avkastning. Faktiskt
+          sparande visar överföringar minus uttag.
+        </p>
       </Card>
-
-      <div className="flex items-center justify-between mb-2">
-        <h2 className="text-[14px] font-bold text-ink">Insättningar</h2>
-        <span className="text-[12px] font-medium text-mauve">{current.toLocaleString("sv-SE")} kr totalt</span>
-      </div>
-      <Card className="overflow-hidden mb-4">
-        {deposits.length === 0 && <p className="text-[13px] p-4 text-mauve">Inga insättningar ännu.</p>}
-        {deposits.map((d, i) => (
-          <div key={d.id} className="flex items-center justify-between px-4 py-3" style={{ borderTop: i === 0 ? "none" : "1px solid #F3E9DE" }}>
-            <span className="text-[14px] font-medium text-ink">{d.label}</span>
-            <div className="flex items-center gap-3">
-              <span className="text-[14px] font-semibold" style={{ color: d.amount < 0 ? "#FF6B5B" : "#2EC4B6" }}>
-                {d.amount >= 0 ? "+" : ""}
-                {d.amount.toLocaleString("sv-SE")} kr
-              </span>
-              <button onClick={() => removeDeposit(d.id)} aria-label="Ta bort">
-                <X size={14} color="#D8C4B8" />
-              </button>
+      <h2 className="font-bold mb-2">Sparhistorik</h2>
+      <Card className="p-4 mb-4">
+        {state.savingsDeposits.length === 0 && (
+          <p>
+            Din första insättning kan vara liten. Välj ett belopp som fungerar
+            för dig.
+          </p>
+        )}
+        {[...state.savingsDeposits].reverse().map((item) => (
+          <div key={item.id} className="border-b border-sand py-3">
+            <div className="flex justify-between gap-2">
+              <span>{item.label}</span>
+              <strong>{item.amount.toLocaleString("sv-SE")} kr</strong>
             </div>
+            <p className="text-xs mt-1">
+              {item.date || "Äldre post utan datum"} ·{" "}
+              {item.kind === "transfer"
+                ? item.amount < 0
+                  ? "Tillbaka till budgeten"
+                  : "Från budgeten"
+                : "Ingående saldo / rättelse · påverkar inte budgeten"}
+            </p>
+            <button
+              aria-label={"Ta bort " + item.label}
+              className="text-sm underline mt-1"
+              onClick={() => {
+                try {
+                  onRemove(item.id);
+                  setError("");
+                } catch (e) {
+                  setError((e as Error).message);
+                }
+              }}
+            >
+              Ta bort
+            </button>
           </div>
         ))}
       </Card>
-
-      <button onClick={() => setShowAdd(true)} className="fixed bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 rounded-full px-5 py-3 shadow-lg bg-mint">
-        <Plus size={18} color="#FFF9F4" />
-        <span className="text-[14px] font-bold text-cream">Justera sparande</span>
-      </button>
-
-      {showAdd && (
-        <div className="fixed inset-0 flex items-end justify-center z-10" style={{ background: "rgba(36,22,35,0.45)" }} onClick={() => setShowAdd(false)}>
-          <div className="bloom-pop w-full max-w-sm rounded-t-3xl p-5 pb-8 bg-cream" onClick={(e) => e.stopPropagation()}>
-            <div className="h-1 w-10 rounded-full mx-auto mb-4 bg-sand" />
-            <h3 className="font-display text-lg font-bold mb-3 text-ink">Ny insättning</h3>
-            <p className="text-[11px] mb-3 text-mauve">Använd ett negativt belopp om du behövt ta ut pengar. Insättningar ger +10 XP 🌱</p>
-            <input
-              autoFocus
-              value={draftLabel}
-              onChange={(e) => setDraftLabel(e.target.value)}
-              placeholder="T.ex. Sparat i september"
-              className="w-full rounded-xl px-4 py-3 mb-2 text-[14px] outline-none bg-white border border-sand text-ink"
-            />
-            <input
-              value={draftAmount}
-              onChange={(e) => setDraftAmount(e.target.value)}
-              placeholder="Belopp (kr)"
-              inputMode="decimal"
-              className="w-full rounded-xl px-4 py-3 mb-4 text-[14px] outline-none bg-white border border-sand text-ink"
-            />
-            <button onClick={addDeposit} className="w-full rounded-xl py-3 text-[14px] font-bold bg-mint text-cream">
-              Lägg till
-            </button>
-          </div>
-        </div>
+      {error && !dialog && (
+        <p role="alert" className="mb-4">
+          {error}
+        </p>
       )}
-    </div>
+      <button
+        className={primaryClass + " w-full"}
+        onClick={() => {
+          setDialog("deposit");
+          setDate(todayISO());
+          setError("");
+        }}
+      >
+        Registrera sparhändelse
+      </button>
+      {dialog === "goal" && (
+        <Modal title="Ditt sparmål" onClose={close}>
+          <form
+            className="space-y-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const g = parseAmount(goal),
+                m = parseAmount(monthly);
+              if (
+                !name.trim() ||
+                !Number.isFinite(g) ||
+                g < 0 ||
+                !Number.isFinite(m) ||
+                m < 0 ||
+                (target && !validDate(target))
+              ) {
+                setError("Ange ett namn och giltiga belopp, minst 0 kr.");
+                return;
+              }
+              onChangeGoal(name.trim(), g, target, m);
+              close();
+            }}
+          >
+            <label className="block">
+              Namn på målet
+              <input
+                className={inputClass}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+              />
+            </label>
+            <label className="block">
+              Målbelopp (kr)
+              <input
+                className={inputClass}
+                inputMode="decimal"
+                value={goal}
+                onChange={(e) => setGoal(e.target.value)}
+                required
+              />
+            </label>
+            <label className="block">
+              Planerat sparande per månad (kr)
+              <input
+                className={inputClass}
+                inputMode="decimal"
+                value={monthly}
+                onChange={(e) => setMonthly(e.target.value)}
+                required
+              />
+            </label>
+            <label className="block">
+              Önskat måldatum (valfritt)
+              <input
+                className={inputClass}
+                type="date"
+                value={target}
+                onChange={(e) => setTarget(e.target.value)}
+              />
+            </label>
+            {error && <p role="alert">{error}</p>}
+            <button className={primaryClass}>Spara mål</button>
+          </form>
+        </Modal>
+      )}
+      {dialog === "deposit" && (
+        <Modal title="Registrera sparhändelse" onClose={close}>
+          <form onSubmit={saveDeposit} className="space-y-3">
+            <label className="block">
+              Typ av händelse
+              <select
+                className={inputClass}
+                value={mode}
+                onChange={(e) => setMode(e.target.value)}
+              >
+                <option value="transfer">
+                  Flytta från budget till sparande
+                </option>
+                <option value="withdrawal">Ta ut till budgeten</option>
+                <option value="adjustment">Ingående saldo / rättelse</option>
+              </select>
+            </label>
+            <p className="text-sm">
+              {mode === "adjustment"
+                ? "Ändrar bara sparsaldo. Ange minus för att minska saldot."
+                : "Uppdaterar både sparandet och budgeten för det valda datumet. Registrera inte samma belopp som ett köp."}
+            </p>
+            <label className="block">
+              Beskrivning
+              <input
+                className={inputClass}
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                required
+              />
+            </label>
+            <label className="block">
+              Belopp (kr)
+              <input
+                className={inputClass}
+                inputMode="decimal"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                required
+              />
+            </label>
+            <label className="block">
+              Datum
+              <input
+                className={inputClass}
+                type="date"
+                max={todayISO()}
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+                required
+              />
+            </label>
+            {error && <p role="alert">{error}</p>}
+            <button className={primaryClass}>Spara händelse</button>
+          </form>
+        </Modal>
+      )}
+    </main>
   );
 }

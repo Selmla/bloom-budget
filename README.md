@@ -17,6 +17,21 @@ stannar på sina datum och kopieras inte till nästa månad.
 **Budget**. När månaden börjar används dess plan automatiskt. Planerna följer
 med i appens vanliga backup.
 
+## Budget, sparande och skulder
+
+- En sparöverföring minskar budgeten för sitt datum. Ett uttag tillbaka till budgeten gör motsatsen. Ingående saldo och rättelser ändrar bara sparsaldo.
+- Äldre sparposter utan datum behåller sitt saldo och påverkar inte historiska budgetar retroaktivt.
+- Lånebetalningar registreras med amortering och ränta/avgifter. Markera om hela betalningen redan ingår i periodens fasta utgifter, så dras den inte igen.
+- En saldokorrigering är ingen betalning. Skuldhistoriken skiljer dessa åt, och färdigbetalda lån kan arkiveras.
+- Registrera samma överföring/betalning en gång, i dess särskilda vy. Registrera den inte också som ett köp.
+- Stäm av perioden mot dina konton. Automatisk övergång till ny månad innebär inte att registreringarna är bekräftade. XP och no-spend är frivilliga.
+
+## Appuppdateringar
+
+`npm run build` genererar ett unikt versionsmärke. Appen söker efter nya versioner när den är öppen, synlig och online. Den sparar innan omladdning och väntar om ett formulär är öppet. Vid första övergången från den äldre appen hämtas den nya versionen vid nästa öppning; kommande versioner kan därefter laddas in automatiskt under användning.
+
+Uppdateringen behåller samma lagringsnyckel och migrerar äldre data utan att hitta på historik. Bara gamla appfiler tas bort från cache. Behåll samma webbplatsadress vid publicering: webbläsarlagring hör till adressen. Byte av adress eller enhet kräver export/import av backup.
+
 ## Köra lokalt
 
 ```bash

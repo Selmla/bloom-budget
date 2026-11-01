@@ -3,9 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "test": "node tests/income.cjs && node tests/plans.cjs",
+    "test": "node tests/income.cjs && node tests/plans.cjs && node tests/money.cjs && node tests/updates.cjs",
     "dev": "next dev",
+    "predev": "node scripts/stamp-build.cjs",
     "build": "next build",
+    "prebuild": "node scripts/stamp-build.cjs",
     "start": "next start",
     "lint": "next lint"
   },

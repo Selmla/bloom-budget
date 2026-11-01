@@ -9,6 +9,40 @@ body {
   font-family: "Plus Jakarta Sans", ui-sans-serif, system-ui;
 }
 
+button,
+input,
+select {
+  min-height: 44px;
+}
+button {
+  min-width: 44px;
+}
+input[type="checkbox"] {
+  min-height: 22px;
+  min-width: 22px;
+  flex-shrink: 0;
+}
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 3px solid #1f8075;
+  outline-offset: 3px;
+}
+@media (max-width: 640px) {
+  input,
+  select {
+    font-size: 16px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
 @keyframes bloom-confetti {
   0% {
     opacity: 1;
