@@ -9,7 +9,7 @@ import { SavingsView } from "../components/SavingsView";
 import { DebtsView } from "../components/DebtsView";
 import { BudgetView } from "../components/BudgetView";
 import { useAppState } from "../lib/useAppState";
-import { BudgetPeriod, FixedExpense, PURCHASE_CATEGORY_COLORS, incomeAt } from "../lib/types";
+import { BudgetPeriod, FixedExpense, PURCHASE_CATEGORY_COLORS, incomeAt, incomeChange } from "../lib/types";
 import {
   todayISO,
   toISO,
@@ -159,6 +159,7 @@ export default function HomePage() {
       streak,
       xp,
       level,
+      income: incomeAt(state.income, state.incomeHistory, toISO(anchor)),
       ...(state.pendingFixed ? { fixed: state.pendingFixed.fixed, pendingFixed: null } : {}),
     });
     // Drop back to viewing "now" in case the user had browsed to the period that
@@ -309,14 +310,11 @@ export default function HomePage() {
   // Editing again within the same period corrects that entry in place rather
   // than logging a second change for a period that hasn't even ended yet.
   function setIncome(newIncome: number) {
-    const from = state.cycleAnchorDate || todayISO();
-    const history = [...state.incomeHistory];
-    if (history.length > 0 && history[history.length - 1].from === from) {
-      history[history.length - 1] = { from, amount: newIncome };
-    } else {
-      history.push({ from, amount: newIncome });
-    }
-    update({ income: newIncome, incomeHistory: history });
+    if (viewOffset === -1 || !Number.isFinite(newIncome) || newIncome < 0) return;
+    const currentFrom = state.cycleAnchorDate || todayISO();
+    if (viewOffset === 1 && !viewedBounds) return;
+    const from = viewOffset === 1 ? toISO(viewedBounds![0]) : currentFrom;
+    update((prev) => incomeChange(prev, from, newIncome, currentFrom));
   }
 
   // Stages fixed expenses for the period that hasn't started yet — `fixed` itself
@@ -352,7 +350,7 @@ export default function HomePage() {
       <FixedExpensesView
         fixed={planningNext ? state.pendingFixed?.fixed ?? state.fixed : state.fixed}
         setFixed={planningNext ? stageFixedForNextPeriod : (fixed) => update({ fixed })}
-        income={state.income}
+        income={planningNext && viewedBounds ? incomeAt(state.income, state.incomeHistory, toISO(viewedBounds[0])) : state.income}
         setIncome={setIncome}
         planningNext={planningNext}
         onBack={() => setView("home")}
@@ -679,7 +677,7 @@ export default function HomePage() {
         {viewOffset !== -1 && (
           <button onClick={() => setView("fixed")} className="w-full flex items-center justify-between rounded-2xl px-4 py-3 mb-4 bg-peach border border-peachline">
             <span className="text-[13px] font-semibold text-ink">
-              Fasta utgifter{viewOffset === 1 ? " · nästa period" : ""} · {viewedFixedTotal.toLocaleString("sv-SE")} kr
+              Inkomst och fasta utgifter{viewOffset === 1 ? " · nästa period" : ""}
             </span>
             <ChevronRight size={16} color="#B08D7A" />
           </button>

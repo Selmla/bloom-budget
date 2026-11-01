@@ -109,6 +109,17 @@ export function incomeAt(income: number, incomeHistory: IncomeEntry[], dateISO: 
   return result;
 }
 
+// Keep a baseline when older saved data has no history, so scheduling the first
+// future change cannot accidentally make it apply to the current period too.
+export function incomeChange(state: Pick<AppState, "income" | "incomeHistory">, from: string, amount: number, currentFrom: string) {
+  const history = state.incomeHistory.length
+    ? state.incomeHistory
+    : [{ from: "0001-01-01", amount: state.income }];
+  const incomeHistory = [...history.filter((entry) => entry.from !== from), { from, amount }]
+    .sort((a, b) => a.from.localeCompare(b.from));
+  return { incomeHistory, income: incomeAt(state.income, incomeHistory, currentFrom) };
+}
+
 export const CATEGORY_COLORS: Record<string, string> = {
   Boende: "#FF6B5B",
   "Räkningar": "#FFB627",

@@ -40,8 +40,8 @@ export function FixedExpensesView({
   }, [fixed]);
 
   function saveIncome() {
-    const val = parseFloat(incomeDraft);
-    if (val && val > 0) setIncome(val);
+    const val = Number(incomeDraft.trim().replace(",", "."));
+    if (incomeDraft.trim() !== "" && Number.isFinite(val) && val >= 0) setIncome(val);
     else setIncomeDraft(String(income));
     setEditingIncome(false);
   }
@@ -89,16 +89,16 @@ export function FixedExpensesView({
       {planningNext && (
         <Card className="p-3 mb-4 bg-peach border-peachline">
           <p className="text-[12px] text-ink">
-            Du planerar fasta utgifter för nästa period. Nuvarande period påverkas inte — de utgår från din befintliga lista tills
-            du sparar här, och tar sedan över automatiskt när nästa period börjar.
+            Du planerar inkomst och fasta utgifter för nästa period. Nuvarande period påverkas inte.
+            Planen tar över automatiskt när nästa period börjar.
           </p>
         </Card>
       )}
 
       <Card className="p-4 mb-4">
         <div className="flex items-center justify-between">
-          <p className="text-[12px] font-semibold text-mauve">Månadsinkomst</p>
-          {!editingIncome && !planningNext && (
+          <p className="text-[12px] font-semibold text-mauve">Månadsinkomst{planningNext ? " · nästa period" : ""}</p>
+          {!editingIncome && (
             <button
               onClick={() => {
                 setIncomeDraft(String(income));
@@ -111,7 +111,7 @@ export function FixedExpensesView({
             </button>
           )}
         </div>
-        {editingIncome && !planningNext ? (
+        {editingIncome ? (
           <div className="flex items-center gap-2 mt-1.5">
             <input
               autoFocus
@@ -119,6 +119,7 @@ export function FixedExpensesView({
               onChange={(e) => setIncomeDraft(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && saveIncome()}
               inputMode="decimal"
+              aria-label={planningNext ? "Månadsinkomst nästa period" : "Månadsinkomst"}
               className="min-w-0 flex-1 rounded-xl px-3 py-2 text-[20px] font-bold outline-none bg-cream border border-sand text-ink"
             />
             <button onClick={saveIncome} className="rounded-xl px-4 py-2 text-[13px] font-bold bg-coral text-cream">
