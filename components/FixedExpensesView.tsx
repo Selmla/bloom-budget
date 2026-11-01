@@ -11,6 +11,7 @@ export function FixedExpensesView({
   income,
   setIncome,
   planningNext = false,
+  periodLabel = "",
   onBack,
 }: {
   fixed: FixedExpense[];
@@ -18,6 +19,7 @@ export function FixedExpensesView({
   income: number;
   setIncome: (n: number) => void;
   planningNext?: boolean;
+  periodLabel?: string;
   onBack: () => void;
 }) {
   const [showAdd, setShowAdd] = useState(false);
@@ -83,21 +85,22 @@ export function FixedExpensesView({
         <button onClick={onBack} className="flex items-center justify-center h-9 w-9 rounded-full bg-white border border-sand" aria-label="Tillbaka">
           <ArrowLeft size={16} color="#241623" />
         </button>
-        <h1 className="font-display text-2xl font-bold text-ink">Fasta utgifter{planningNext ? " · nästa period" : ""}</h1>
+        <h1 className="font-display text-2xl font-bold text-ink">Inkomst och utgifter</h1>
       </div>
+      <p className="text-[12px] font-semibold text-mauve mb-4">{periodLabel}</p>
 
       {planningNext && (
         <Card className="p-3 mb-4 bg-peach border-peachline">
           <p className="text-[12px] text-ink">
-            Du planerar inkomst och fasta utgifter för nästa period. Nuvarande period påverkas inte.
-            Planen tar över automatiskt när nästa period börjar.
+            Du planerar inkomst och fasta utgifter för den valda perioden. Andra perioder påverkas inte.
+            En ny period börjar med en kopia av föregående periods plan.
           </p>
         </Card>
       )}
 
       <Card className="p-4 mb-4">
         <div className="flex items-center justify-between">
-          <p className="text-[12px] font-semibold text-mauve">Månadsinkomst{planningNext ? " · nästa period" : ""}</p>
+          <p className="text-[12px] font-semibold text-mauve">Månadsinkomst</p>
           {!editingIncome && (
             <button
               onClick={() => {
@@ -119,7 +122,7 @@ export function FixedExpensesView({
               onChange={(e) => setIncomeDraft(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && saveIncome()}
               inputMode="decimal"
-              aria-label={planningNext ? "Månadsinkomst nästa period" : "Månadsinkomst"}
+              aria-label={planningNext ? "Månadsinkomst vald period" : "Månadsinkomst"}
               className="min-w-0 flex-1 rounded-xl px-3 py-2 text-[20px] font-bold outline-none bg-cream border border-sand text-ink"
             />
             <button onClick={saveIncome} className="rounded-xl px-4 py-2 text-[13px] font-bold bg-coral text-cream">

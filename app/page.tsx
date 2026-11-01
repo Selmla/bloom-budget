@@ -8,8 +8,10 @@ import { FixedExpensesView } from "../components/FixedExpensesView";
 import { SavingsView } from "../components/SavingsView";
 import { DebtsView } from "../components/DebtsView";
 import { BudgetView } from "../components/BudgetView";
+import { rollPeriods } from "../lib/rollover";
+import { ensurePlans, readPlan, changePlan } from "../lib/plans";
 import { useAppState } from "../lib/useAppState";
-import { BudgetPeriod, FixedExpense, PURCHASE_CATEGORY_COLORS, incomeAt, incomeChange } from "../lib/types";
+import { BudgetPeriod, PURCHASE_CATEGORY_COLORS } from "../lib/types";
 import {
   todayISO,
   toISO,
@@ -24,11 +26,11 @@ import {
 } from "../lib/dates";
 
 type View = "home" | "fixed" | "savings" | "debts" | "budget";
-// -1 = previous period (read-only history), 0 = the real current period, 1 = next
-// period (can plan ahead into it). Purely a home-screen viewing choice — it never
+// -1 = previous period (read-only history), 0 = current, positive = future.
+// Purely a home-screen viewing choice — it never
 // touches state.cycleAnchorDate/cycleEndDate, which is what the automatic
 // streak/XP rollover actually tracks, so browsing can never desync a real rollover.
-type ViewOffset = -1 | 0 | 1;
+type ViewOffset = number;
 const XP_TO_NEXT = 500;
 
 function nextXpLevel(xp: number, level: number, amount: number) {
@@ -38,8 +40,9 @@ function nextXpLevel(xp: number, level: number, amount: number) {
 }
 
 function periodPhrase(period: BudgetPeriod, offset: ViewOffset): string {
-  if (period === "week") return offset === -1 ? "förra veckan" : offset === 1 ? "nästa vecka" : "denna vecka";
-  return offset === -1 ? "förra månaden" : offset === 1 ? "nästa månad" : "denna månad";
+  if (offset > 1) return period === "week" ? "vald vecka" : "vald månad";
+  if (period === "week") return offset === -1 ? "förra veckan" : offset > 0 ? "nästa vecka" : "denna vecka";
+  return offset === -1 ? "förra månaden" : offset > 0 ? "nästa månad" : "denna månad";
 }
 
 export default function HomePage() {
@@ -68,9 +71,11 @@ export default function HomePage() {
     }
     document.addEventListener("visibilitychange", refresh);
     window.addEventListener("focus", refresh);
+    const timer = window.setInterval(refresh, 60000);
     return () => {
       document.removeEventListener("visibilitychange", refresh);
       window.removeEventListener("focus", refresh);
+      window.clearInterval(timer);
     };
   }, []);
 
@@ -111,96 +116,20 @@ export default function HomePage() {
       return;
     }
 
-    let anchor = new Date(state.cycleAnchorDate);
-    let end = new Date(state.cycleEndDate);
-    if (now < end) return;
-
-    const fixedTotalNow = state.fixed.reduce((s, e) => s + e.amount, 0);
-    let streak = state.streak;
-    let xp = state.xp;
-    let level = state.level;
-    let leveledUp = false;
-
-    while (now >= end) {
-      const periodPurchases = state.purchases.filter((p) => {
-        const d = new Date(p.date);
-        return d >= anchor && d < end;
-      });
-      const periodSpent = periodPurchases.filter((p) => p.type === "expense").reduce((s, p) => s + p.amount, 0);
-      const periodIncome = periodPurchases.filter((p) => p.type === "income").reduce((s, p) => s + p.amount, 0);
-      const monthlyPlan = incomeAt(state.income, state.incomeHistory, toISO(anchor)) - fixedTotalNow;
-      const periodBudget =
-        state.budgetOverride !== null
-          ? state.budgetPeriod === "week"
-            ? Math.round(state.budgetOverride / WEEKS_PER_MONTH)
-            : state.budgetOverride
-          : state.budgetPeriod === "week"
-          ? Math.round(monthlyPlan / WEEKS_PER_MONTH)
-          : monthlyPlan;
-
-      if (periodBudget - periodSpent + periodIncome >= 0) {
-        streak += 1;
-        const res = nextXpLevel(xp, level, 50);
-        xp = res.xp;
-        level = res.level;
-        leveledUp = leveledUp || res.leveledUp;
-      } else {
-        streak = 0;
-      }
-
-      [anchor, end] = nextPeriodBounds(end, state.budgetPeriod, state.budgetStartDay);
-    }
-
-    // A real rollover happened — promote any fixed-expenses plan staged for the
-    // period that's now starting, so it becomes the live figure from here on.
-    update({
-      cycleAnchorDate: toISO(anchor),
-      cycleEndDate: toISO(end),
-      streak,
-      xp,
-      level,
-      income: incomeAt(state.income, state.incomeHistory, toISO(anchor)),
-      ...(state.pendingFixed ? { fixed: state.pendingFixed.fixed, pendingFixed: null } : {}),
-    });
+    const rollover = rollPeriods(state, now);
+    if (!rollover) return;
+    update(rollover.patch);
     // Drop back to viewing "now" in case the user had browsed to the period that
     // just became current (or later).
     setViewOffset(0);
-    if (leveledUp) {
+    if (rollover.leveledUp) {
       setCelebrate(true);
       setTimeout(() => setCelebrate(false), 1000);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, state.cycleAnchorDate, state.cycleEndDate, state.budgetPeriod, state.budgetStartDay, tick]);
 
-  const fixedTotal = useMemo(() => state.fixed.reduce((s, e) => s + e.amount, 0), [state.fixed]);
-
-  // The real, tracked current period — always what streak/XP evaluate against,
-  // and what the Budget view shows, regardless of what's being browsed below.
-  const realCurrentPurchases = useMemo(() => {
-    if (!state.cycleAnchorDate || !state.cycleEndDate) return [];
-    const start = new Date(state.cycleAnchorDate);
-    const end = new Date(state.cycleEndDate);
-    return state.purchases.filter((p) => {
-      const d = new Date(p.date);
-      return d >= start && d < end;
-    });
-  }, [state.purchases, state.cycleAnchorDate, state.cycleEndDate]);
-
-  const spent = useMemo(() => realCurrentPurchases.filter((p) => p.type === "expense").reduce((s, p) => s + p.amount, 0), [realCurrentPurchases]);
-  const extraIncome = useMemo(() => realCurrentPurchases.filter((p) => p.type === "income").reduce((s, p) => s + p.amount, 0), [realCurrentPurchases]);
-
-  const monthlyBudgetPlanned = state.income - fixedTotal;
-  // Always the live, current-moment figure — what Budget view shows, unaffected
-  // by whatever period is being browsed on the home screen below.
-  const budgetPlanned =
-    state.budgetOverride !== null
-      ? state.budgetPeriod === "week"
-        ? Math.round(state.budgetOverride / WEEKS_PER_MONTH)
-        : state.budgetOverride
-      : state.budgetPeriod === "week"
-      ? Math.round(monthlyBudgetPlanned / WEEKS_PER_MONTH)
-      : monthlyBudgetPlanned;
-
+  const currentPlan = readPlan(state, state.cycleAnchorDate || todayISO());
   // The period the home screen is currently displaying — independent of the real
   // tracked period above, and reset to "now" on every fresh load (not persisted).
   const viewedBounds = useMemo<[Date, Date] | null>(() => {
@@ -208,7 +137,11 @@ export default function HomePage() {
     const anchor = new Date(state.cycleAnchorDate);
     const end = new Date(state.cycleEndDate);
     if (viewOffset === 0) return [anchor, end];
-    if (viewOffset === 1) return nextPeriodBounds(end, state.budgetPeriod, state.budgetStartDay);
+    if (viewOffset > 0) {
+      let bounds: [Date, Date] = [anchor, end];
+      for (let i = 0; i < viewOffset; i++) bounds = nextPeriodBounds(bounds[1], state.budgetPeriod, state.budgetStartDay);
+      return bounds;
+    }
     return prevPeriodBounds(anchor, state.budgetPeriod, state.budgetStartDay);
   }, [state.cycleAnchorDate, state.cycleEndDate, state.budgetPeriod, state.budgetStartDay, viewOffset]);
 
@@ -221,27 +154,24 @@ export default function HomePage() {
     });
   }, [state.purchases, viewedBounds]);
 
-  // If fixed expenses have been staged for next period, that's what "next" should
-  // plan against — current/past are untouched by it, they only ever see `fixed`.
-  const viewedFixedTotal =
-    viewOffset === 1 && state.pendingFixed ? state.pendingFixed.fixed.reduce((s, e) => s + e.amount, 0) : fixedTotal;
+  const viewedFrom = viewedBounds ? toISO(viewedBounds[0]) : state.cycleAnchorDate || todayISO();
+  const viewedPlan = readPlan(ensurePlans(state, viewedFrom), viewedFrom);
+  const viewedFixedTotal = viewedPlan.fixed.reduce((sum, e) => sum + e.amount, 0);
+  const viewedMonthlyBudget = viewedPlan.override ?? (viewedPlan.income - viewedFixedTotal);
+  const viewedBudgetPlanned = state.budgetPeriod === "week" ? Math.round(viewedMonthlyBudget / WEEKS_PER_MONTH) : viewedMonthlyBudget;
 
-  // Uses the income that was actually in effect at the start of the VIEWED period —
-  // editing income today only reshapes the current and future periods; a period
-  // you're browsing in the past keeps showing what its budget genuinely was.
-  // (Any custom override isn't logged this way yet, so it still uses today's live
-  // value for every period — see TODO.md.)
-  const viewedBudgetPlanned = useMemo(() => {
-    if (!viewedBounds) return budgetPlanned;
-    const viewedMonthlyPlanned = incomeAt(state.income, state.incomeHistory, toISO(viewedBounds[0])) - viewedFixedTotal;
-    return state.budgetOverride !== null
-      ? state.budgetPeriod === "week"
-        ? Math.round(state.budgetOverride / WEEKS_PER_MONTH)
-        : state.budgetOverride
-      : state.budgetPeriod === "week"
-      ? Math.round(viewedMonthlyPlanned / WEEKS_PER_MONTH)
-      : viewedMonthlyPlanned;
-  }, [viewedBounds, state.income, state.incomeHistory, viewedFixedTotal, state.budgetOverride, state.budgetPeriod]);
+  useEffect(() => {
+    if (!ready || !viewedBounds || viewOffset < 0) return;
+    const prepared = ensurePlans(state, viewedFrom);
+    if (Object.keys(prepared.periodPlans).length !== Object.keys(state.periodPlans).length) {
+      update(prev => ({ periodPlans: ensurePlans(prev, viewedFrom).periodPlans }));
+    }
+  }, [ready, viewedFrom, state.periodPlans, state.cycleAnchorDate, state.cycleEndDate]);
+
+  function editViewedPlan(patch: Partial<typeof viewedPlan>) {
+    if (viewOffset < 0) return;
+    update(prev => changePlan(prev, viewedFrom, patch));
+  }
 
   const viewedSpent = useMemo(() => viewedPurchases.filter((p) => p.type === "expense").reduce((s, p) => s + p.amount, 0), [viewedPurchases]);
   const viewedExtraIncome = useMemo(() => viewedPurchases.filter((p) => p.type === "income").reduce((s, p) => s + p.amount, 0), [viewedPurchases]);
@@ -282,7 +212,7 @@ export default function HomePage() {
     if (!draftLabel.trim() || !amt || amt <= 0) return;
     // Planned (next-period) transactions are dated to that period's start, since
     // there's no real "today" inside a period that hasn't begun yet.
-    const date = viewOffset === 1 && viewedBounds ? toISO(viewedBounds[0]) : todayISO();
+    const date = viewOffset > 0 && viewedBounds ? toISO(viewedBounds[0]) : todayISO();
     const tx = {
       id: Date.now(),
       label: draftLabel.trim(),
@@ -305,25 +235,8 @@ export default function HomePage() {
     update({ purchases: state.purchases.filter((p) => p.id !== id) });
   }
 
-  // Logs *when* an income change takes effect (the start of the current tracked
-  // period) so past periods keep showing what income actually was back then.
-  // Editing again within the same period corrects that entry in place rather
-  // than logging a second change for a period that hasn't even ended yet.
-  function setIncome(newIncome: number) {
-    if (viewOffset === -1 || !Number.isFinite(newIncome) || newIncome < 0) return;
-    const currentFrom = state.cycleAnchorDate || todayISO();
-    if (viewOffset === 1 && !viewedBounds) return;
-    const from = viewOffset === 1 ? toISO(viewedBounds![0]) : currentFrom;
-    update((prev) => incomeChange(prev, from, newIncome, currentFrom));
-  }
-
-  // Stages fixed expenses for the period that hasn't started yet — `fixed` itself
-  // is left untouched, so this can never change the current period's numbers. It
-  // gets promoted to `fixed` automatically once that period actually begins (see
-  // the rollover effect above).
-  function stageFixedForNextPeriod(newFixed: FixedExpense[]) {
-    if (!viewedBounds) return;
-    update({ pendingFixed: { from: toISO(viewedBounds[0]), fixed: newFixed } });
+  function setIncome(income: number) {
+    if (Number.isFinite(income) && income >= 0) editViewedPlan({ income });
   }
 
   function saveSuggestionToDeposits(amt: number) {
@@ -345,14 +258,15 @@ export default function HomePage() {
   }
 
   if (view === "fixed") {
-    const planningNext = viewOffset === 1;
+    const planningNext = viewOffset > 0;
     return (
       <FixedExpensesView
-        fixed={planningNext ? state.pendingFixed?.fixed ?? state.fixed : state.fixed}
-        setFixed={planningNext ? stageFixedForNextPeriod : (fixed) => update({ fixed })}
-        income={planningNext && viewedBounds ? incomeAt(state.income, state.incomeHistory, toISO(viewedBounds[0])) : state.income}
+        fixed={viewedPlan.fixed}
+        setFixed={(fixed) => editViewedPlan({ fixed })}
+        income={viewedPlan.income}
         setIncome={setIncome}
         planningNext={planningNext}
+        periodLabel={viewedBounds ? cycleRangeLabel(viewedFrom, toISO(viewedBounds[1])) : ""}
         onBack={() => setView("home")}
       />
     );
@@ -392,18 +306,21 @@ export default function HomePage() {
   if (view === "budget") {
     return (
       <BudgetView
+        showSettings={viewOffset === 0}
+        readOnly={viewOffset < 0}
+        periodLabel={viewedBounds ? cycleRangeLabel(viewedFrom, toISO(viewedBounds[1])) : ""}
         period={state.budgetPeriod}
         setPeriod={(budgetPeriod) => update({ budgetPeriod })}
         startDay={state.budgetStartDay}
         setStartDay={(budgetStartDay) => update({ budgetStartDay })}
-        income={state.income}
-        fixedTotal={fixedTotal}
-        override={state.budgetOverride}
-        setOverride={(budgetOverride) => update({ budgetOverride })}
-        budgetPlanned={budgetPlanned}
-        spent={spent}
-        extraIncome={extraIncome}
-        periodEndDate={state.cycleEndDate}
+        income={viewedPlan.income}
+        fixedTotal={viewedFixedTotal}
+        override={viewedPlan.override}
+        setOverride={(override) => editViewedPlan({ override })}
+        budgetPlanned={viewedBudgetPlanned}
+        spent={viewedSpent}
+        extraIncome={viewedExtraIncome}
+        periodEndDate={viewedBounds ? toISO(viewedBounds[1]) : null}
         onBack={() => setView("home")}
       />
     );
@@ -427,14 +344,13 @@ export default function HomePage() {
               </button>
               <h1 className="font-display text-2xl font-bold text-ink">
                 {!viewedBounds
-                  ? new Date().toLocaleDateString("sv-SE", { month: "long" }).replace(/^./, (c) => c.toUpperCase())
+                  ? new Date().toLocaleDateString("sv-SE", { month: "long", year: "numeric" }).replace(/^./, (c) => c.toUpperCase())
                   : state.budgetPeriod === "month" && state.budgetStartDay !== 1
                   ? cycleRangeLabel(toISO(viewedBounds[0]), toISO(viewedBounds[1]))
-                  : viewedBounds[0].toLocaleDateString("sv-SE", { month: "long" }).replace(/^./, (c) => c.toUpperCase())}
+                  : viewedBounds[0].toLocaleDateString("sv-SE", { month: "long", year: "numeric" }).replace(/^./, (c) => c.toUpperCase())}
               </h1>
               <button
-                onClick={() => setViewOffset((o) => (o < 1 ? ((o + 1) as ViewOffset) : o))}
-                disabled={viewOffset === 1}
+                onClick={() => setViewOffset((o) => o + 1)}
                 className="h-6 w-6 shrink-0 rounded-full flex items-center justify-center bg-white border border-sand disabled:opacity-30"
                 aria-label="Nästa period"
               >
@@ -453,7 +369,7 @@ export default function HomePage() {
               ) : (
                 <>
                   {state.budgetPeriod === "week" ? `Vecka ${getISOWeek(viewedBounds[0])} · ` : ""}
-                  {viewOffset === 1
+                  {viewOffset > 0
                     ? `Börjar om ${Math.max(0, Math.round((viewedBounds[0].getTime() - Date.now()) / 86400000))} dagar`
                     : "Avslutad"}
                 </>
@@ -483,7 +399,7 @@ export default function HomePage() {
         {viewOffset !== 0 && (
           <Card className="p-3 mb-4 flex items-center justify-between gap-3 bg-peach border-peachline">
             <p className="text-[12px] font-semibold text-ink">
-              {viewOffset === 1 ? "Du planerar en kommande period — inget räknas ännu." : "Du tittar på en avslutad period (historik)."}
+              {viewOffset > 0 ? "Du planerar en kommande period — ändringar gäller bara denna period." : "Du tittar på en avslutad period (historik)."}
             </p>
             <button onClick={() => setViewOffset(0)} className="shrink-0 text-[11px] font-bold text-coral">
               Till nu
@@ -492,7 +408,7 @@ export default function HomePage() {
         )}
 
         {/* first-run prompt */}
-        {state.income === 0 && (
+        {currentPlan.income === 0 && (
           <Card className="p-4 mb-4 bg-peach border-peachline">
             <p className="text-[13px] font-bold mb-1 text-ink">Kom igång 🌸</p>
             <p className="text-[12px] mb-3 text-mauve">Lägg till din inkomst och dina fasta utgifter så börjar appen räkna ut din budget.</p>
@@ -506,7 +422,7 @@ export default function HomePage() {
         <div className="rounded-3xl p-5 mb-4 relative overflow-hidden bg-ink">
           <div className="flex items-center justify-between mb-1">
             <p className="text-[13px] font-medium" style={{ color: "#C9AFC2" }}>
-              {viewOffset === 1 ? "Planerat kvar" : viewOffset === -1 ? "Blev kvar" : "Kvar att röra dig med"}
+              {viewOffset > 0 ? "Planerat kvar" : viewOffset === -1 ? "Blev kvar" : "Kvar att röra dig med"}
             </p>
             <div className="flex rounded-full p-0.5" style={{ background: "rgba(255,255,255,0.1)" }}>
               <button
@@ -632,7 +548,7 @@ export default function HomePage() {
         <Card className="overflow-hidden mb-4">
           {viewedPurchases.length === 0 && (
             <p className="text-[13px] p-4 text-mauve">
-              {viewOffset === 1 ? `Inget planerat ${periodPhrase(state.budgetPeriod, viewOffset)} än.` : `Inga transaktioner ${periodPhrase(state.budgetPeriod, viewOffset)}.`}
+              {viewOffset > 0 ? `Inget planerat ${periodPhrase(state.budgetPeriod, viewOffset)} än.` : `Inga transaktioner ${periodPhrase(state.budgetPeriod, viewOffset)}.`}
             </p>
           )}
           {viewedPurchases.map((p, i) => (
@@ -677,7 +593,7 @@ export default function HomePage() {
         {viewOffset !== -1 && (
           <button onClick={() => setView("fixed")} className="w-full flex items-center justify-between rounded-2xl px-4 py-3 mb-4 bg-peach border border-peachline">
             <span className="text-[13px] font-semibold text-ink">
-              Inkomst och fasta utgifter{viewOffset === 1 ? " · nästa period" : ""}
+              Inkomst och fasta utgifter{viewOffset > 0 ? " · vald period" : ""}
             </span>
             <ChevronRight size={16} color="#B08D7A" />
           </button>
@@ -717,7 +633,7 @@ export default function HomePage() {
         {!showAdd && viewOffset !== -1 && (
           <button onClick={() => setShowAdd(true)} className="fixed bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 rounded-full px-5 py-3 shadow-lg bg-coral">
             <Plus size={18} color="#FFF9F4" />
-            <span className="text-[14px] font-bold text-cream">{viewOffset === 1 ? "Planera transaktion" : "Lägg till transaktion"}</span>
+            <span className="text-[14px] font-bold text-cream">{viewOffset > 0 ? "Planera transaktion" : "Lägg till transaktion"}</span>
           </button>
         )}
 
@@ -725,7 +641,7 @@ export default function HomePage() {
           <div className="fixed inset-0 flex items-end justify-center z-10" style={{ background: "rgba(36,22,35,0.45)" }} onClick={() => setShowAdd(false)}>
             <div className="bloom-pop w-full max-w-sm rounded-t-3xl p-5 pb-8 bg-cream" onClick={(e) => e.stopPropagation()}>
               <div className="h-1 w-10 rounded-full mx-auto mb-4 bg-sand" />
-              <h3 className="font-display text-lg font-bold mb-3 text-ink">{viewOffset === 1 ? "Planerad transaktion" : "Ny transaktion"}</h3>
+              <h3 className="font-display text-lg font-bold mb-3 text-ink">{viewOffset > 0 ? "Planerad transaktion" : "Ny transaktion"}</h3>
               <div className="flex gap-2 mb-3">
                 <button
                   onClick={() => setDraftType("expense")}

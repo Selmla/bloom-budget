@@ -7,6 +7,9 @@ import { BudgetPeriod } from "../lib/types";
 import { WEEKS_PER_MONTH } from "../lib/dates";
 
 export function BudgetView({
+  showSettings = true,
+  readOnly = false,
+  periodLabel = "",
   period,
   setPeriod,
   startDay,
@@ -21,6 +24,9 @@ export function BudgetView({
   periodEndDate,
   onBack,
 }: {
+  showSettings?: boolean;
+  readOnly?: boolean;
+  periodLabel?: string;
   period: BudgetPeriod;
   setPeriod: (p: BudgetPeriod) => void;
   startDay: number;
@@ -72,10 +78,11 @@ export function BudgetView({
         </button>
         <h1 className="font-display text-2xl font-bold text-ink">Budget</h1>
       </div>
+      <p className="text-[12px] font-semibold text-mauve mb-4">{periodLabel}</p>
 
       <div className="rounded-3xl p-5 mb-4 relative overflow-hidden bg-ink">
         <p className="text-[13px] font-medium" style={{ color: "#C9AFC2" }}>
-          Kvar {period === "week" ? "denna vecka" : "denna månad"}
+          Kvar i vald {period === "week" ? "vecka" : "månad"}
         </p>
         <p className="font-display text-4xl font-bold mt-1 text-cream">{(budgetPlanned - netSpent).toLocaleString("sv-SE")} kr</p>
         <p className="text-[12px] mt-2" style={{ color: "#C9AFC2" }}>
@@ -94,6 +101,7 @@ export function BudgetView({
         </div>
       </Card>
 
+      {showSettings && <>
       <Card className="p-4 mb-4">
         <p className="text-[12px] font-semibold mb-3 text-mauve">Period</p>
         <div className="flex gap-2">
@@ -156,10 +164,11 @@ export function BudgetView({
         </p>
       </Card>
 
+      </>}
       <Card className="p-4 mb-4">
         <div className="flex items-center justify-between mb-2">
           <p className="text-[12px] font-semibold text-mauve">Hur beloppet räknas fram</p>
-          {!editingOverride && (
+          {!editingOverride && !readOnly && (
             <button
               onClick={() => {
                 setOverrideDraft(override !== null ? String(overrideForPeriod(override)) : String(autoAmount));

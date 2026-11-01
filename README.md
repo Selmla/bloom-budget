@@ -5,6 +5,18 @@ En budget-app utan bankkoppling. All data sparas bara i din egen webbläsare
 ser din information. Andra som installerar appen från samma länk får sin egen
 lokala data, helt separat från din.
 
+## Planera kommande månader
+
+Bläddra med pilarna vid månadens namn för att planera flera månader framåt.
+Varje ny månadsplan får en egen kopia av föregående månads inkomst, fasta
+utgifter och eventuella egna budgetbelopp. När planen har skapats påverkas den
+inte av senare ändringar i andra månader. Enskilda köp och extra inkomster
+stannar på sina datum och kopieras inte till nästa månad.
+
+Ändra den valda månadens värden under **Inkomst och fasta utgifter** eller
+**Budget**. När månaden börjar används dess plan automatiskt. Planerna följer
+med i appens vanliga backup.
+
 ## Köra lokalt
 
 ```bash

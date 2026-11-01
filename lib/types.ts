@@ -47,6 +47,7 @@ export type PendingFixed = {
 };
 
 export type AppState = {
+  periodPlans: Record<string, { income: number; fixed: FixedExpense[]; override: number | null }>;
   hasOnboarded: boolean;
   income: number;
   incomeHistory: IncomeEntry[];
@@ -74,6 +75,7 @@ export type AppState = {
 };
 
 export const DEFAULT_STATE: AppState = {
+  periodPlans: {},
   hasOnboarded: false,
   income: 0,
   incomeHistory: [],
